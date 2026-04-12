@@ -3,9 +3,17 @@ package com.example.board.service;
 import com.example.board.domain.Post;
 import com.example.board.dto.PostCreateRequest;
 import com.example.board.dto.PostResponse;
+import com.example.board.dto.PostUpdateRequest;
+import com.example.board.exception.PostNotFoundException;
 import com.example.board.repository.PostRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -18,9 +26,49 @@ public class PostService {
         return postRepository.save(post).getId();
     }
 
+    @Transactional
     public PostResponse getById(Long id) {
         Post post = postRepository.findById(id)
-                .orElseThrow(() -> new IllegalArgumentException("게시글이 없습니다. id=" +id));
-        return new PostResponse(post.getId(), post.getTitle(), post.getContent());
+                .orElseThrow(() -> new PostNotFoundException(id));
+        post.increaseViewCount();
+
+        return new PostResponse(post.getId(), post.getTitle(), post.getContent(), post.getCreatedAt(), post.getUpdatedAt()
+        ,post.getViewCount());
+    }
+
+    @Transactional
+    public void update(Long id, PostUpdateRequest request) {
+        Post post = postRepository.findById(id)
+                .orElseThrow(() -> new PostNotFoundException(id));
+
+        post.update(request.getTitle(), request.getContent());
+    }
+
+    @Transactional
+    public void delete(Long id) {
+        Post post = postRepository.findById(id)
+                .orElseThrow(() -> new PostNotFoundException(id));
+        postRepository.delete(post);
+    }
+
+    public List<PostResponse> getAll() {
+        return postRepository.findAll().stream()
+                .map(post -> new PostResponse(
+                        post.getId(),
+                        post.getTitle(),
+                        post.getContent(),
+                        post.getCreatedAt(),
+                        post.getUpdatedAt(),
+                        post.getViewCount()
+                ))
+                .toList();
+    }
+
+    public Page<PostResponse> getPosts(int page, int size) {
+        PageRequest pageRequest = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "id"));
+
+        return postRepository.findAll(pageRequest)
+                .map(post -> new PostResponse(post.getId(), post.getTitle(), post.getContent(),
+                        post.getCreatedAt(), post.getUpdatedAt(), post.getViewCount()));
     }
 }

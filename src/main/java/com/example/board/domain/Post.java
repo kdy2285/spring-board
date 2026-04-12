@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @Entity
 @Getter
 @NoArgsConstructor
-public class Post {
+public class Post extends BaseTimeEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -18,10 +18,20 @@ public class Post {
 
     private String title;
     private String content;
-    private String test;
+    private int viewCount;
 
     public Post(String title, String content) {
         this.title = title;
         this.content = content;
+        this.viewCount = 0;
+    }
+
+    public void update(String title, String content) {
+        this.title = title;
+        this.content = content;
+    }
+
+    public void increaseViewCount() {
+        this.viewCount++;
     }
 }
