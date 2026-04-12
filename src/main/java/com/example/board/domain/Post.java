@@ -18,6 +18,7 @@ public class Post {
 
     private String title;
     private String content;
+    private String test;
 
     public Post(String title, String content) {
         this.title = title;
