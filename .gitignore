@@ -1,0 +1,14 @@
+# build
+/build
+.gradle
+
+# intellij
+.idea
+*.iml
+out
+
+# mac
+.DS_Store
+
+# logs
+*.log
