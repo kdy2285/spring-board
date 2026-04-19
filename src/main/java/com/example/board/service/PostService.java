@@ -6,6 +6,7 @@ import com.example.board.dto.PostResponse;
 import com.example.board.dto.PostUpdateRequest;
 import com.example.board.exception.PostNotFoundException;
 import com.example.board.repository.PostRepository;
+import com.example.board.service.view.ViewCountService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -17,10 +18,13 @@ import java.util.List;
 
 @Service
 @RequiredArgsConstructor
+@Transactional(readOnly = true)
 public class PostService {
 
     private final PostRepository postRepository;
+    private final ViewCountService viewCountService;
 
+    @Transactional
     public Long create(PostCreateRequest request) {
         Post post = new Post(request.getTitle(), request.getContent());
         return postRepository.save(post).getId();
@@ -28,12 +32,21 @@ public class PostService {
 
     @Transactional
     public PostResponse getById(Long id) {
+//        postRepository.increaseViewCount(id);
+        viewCountService.increase(id);
+
         Post post = postRepository.findById(id)
                 .orElseThrow(() -> new PostNotFoundException(id));
-        post.increaseViewCount();
 
-        return new PostResponse(post.getId(), post.getTitle(), post.getContent(), post.getCreatedAt(), post.getUpdatedAt()
-        ,post.getViewCount());
+        Long redisCount = viewCountService.get(id);
+
+
+        return new PostResponse(post.getId(),
+                post.getTitle(),
+                post.getContent(),
+                post.getCreatedAt(),
+                post.getUpdatedAt(),
+                post.getViewCount());
     }
 
     @Transactional
