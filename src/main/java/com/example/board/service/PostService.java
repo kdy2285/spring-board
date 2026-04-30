@@ -30,15 +30,17 @@ public class PostService {
         return postRepository.save(post).getId();
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public PostResponse getById(Long id) {
 //        postRepository.increaseViewCount(id);
-        viewCountService.increase(id);
 
         Post post = postRepository.findById(id)
                 .orElseThrow(() -> new PostNotFoundException(id));
 
+        viewCountService.increase(id);
+
         Long redisCount = viewCountService.get(id);
+        long totalViewCount = post.getViewCount() + redisCount;
 
 
         return new PostResponse(post.getId(),
@@ -46,7 +48,7 @@ public class PostService {
                 post.getContent(),
                 post.getCreatedAt(),
                 post.getUpdatedAt(),
-                post.getViewCount());
+                totalViewCount);
     }
 
     @Transactional
@@ -83,5 +85,23 @@ public class PostService {
         return postRepository.findAll(pageRequest)
                 .map(post -> new PostResponse(post.getId(), post.getTitle(), post.getContent(),
                         post.getCreatedAt(), post.getUpdatedAt(), post.getViewCount()));
+    }
+
+    @Transactional
+    public void flushViewCountToDb(Long postId) {
+        Long redisCount = viewCountService.getAndDeleteDelta(postId);
+
+        if (redisCount <= 0L) {
+            viewCountService.removeDirtyPostId(postId);
+            return;
+        }
+
+        try {
+            postRepository.increaseViewCountBy(postId, redisCount);
+            viewCountService.removeDirtyPostId(postId);
+        } catch (Exception e) {
+            viewCountService.increaseBy(postId, redisCount);
+            throw e;
+        }
     }
 }

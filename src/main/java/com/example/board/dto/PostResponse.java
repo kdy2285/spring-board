@@ -13,5 +13,5 @@ public class PostResponse {
     private String content;
     private LocalDateTime created;
     private LocalDateTime updated;
-    private int viewCount;
+    private long viewCount;
 }

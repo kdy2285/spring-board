@@ -54,4 +54,10 @@ public class PostController {
     ) {
         return ResponseEntity.ok(ApiResponse.success(postService.getPosts(page, size)));
     }
+
+    @PostMapping("/{postId}/view-count/flush")
+    public ApiResponse<Void> flushViewCount(@PathVariable Long postId) {
+        postService.flushViewCountToDb(postId);
+        return ApiResponse.success(null);
+    }
 }
