@@ -72,4 +72,30 @@ GET post:viewCount:delta:1
 SMEMBERS post:viewCount:dirty
 성능 비교
 
-DB 직접 update 방식과 Redis buffering 방식의 성능 비교는 추후 진행 예정입니다.
+## 성능 비교 계획
+
+### 비교 대상
+1. DB 직접 증가 방식
+   - 조회 요청마다 DB update 발생
+   - 트래픽 증가 시 DB write 부하 증가
+
+2. Redis 버퍼링 방식
+   - 조회 요청 시 Redis INCR 수행
+   - dirty set에 변경된 게시글 ID 저장
+   - Scheduler 또는 manual flush 시 DB에 누적 반영
+
+### 비교 지표
+- 동일 조회 요청 수 기준 응답 시간
+- DB update 쿼리 발생 횟수
+- Redis delta 누적 값
+- flush 후 DB viewCount 반영 여부
+- DB 반영 실패 시 Redis delta 복원 여부
+
+### 테스트 시나리오
+1. 특정 게시글에 조회 요청 100회 전송
+2. Redis delta 값이 100인지 확인
+3. dirty set에 게시글 ID가 포함되었는지 확인
+4. flush API 실행
+5. DB viewCount가 100 증가했는지 확인
+6. Redis delta와 dirty set이 정리되었는지 확인
+7. DB update 실패 상황에서 delta가 복원되는지 확인
