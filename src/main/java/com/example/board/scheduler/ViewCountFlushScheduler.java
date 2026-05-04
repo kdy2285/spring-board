@@ -31,12 +31,11 @@ public class ViewCountFlushScheduler {
         for (String postId : dirtyPostIds) {
             try {
                 postService.flushViewCountToDb(Long.parseLong(postId));
-                log.info("[ViewCountFlushScheduler] flush 성공 - postId={}", postId);
+                log.debug("[ViewCountFlushScheduler] flush 성공 - postId={}", postId);
             } catch (Exception e) {
                 log.error("[ViewCountFlushScheduler] flush 실패 - postId={}", postId, e);
             }
         }
 
-        log.info("[ViewCountFlushScheduler] flush 종료");
-    }
+        log.info("[ViewCountFlushScheduler] flush 종료 - 처리 수={}", dirtyPostIds.size());    }
 }

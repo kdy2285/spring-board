@@ -8,6 +8,7 @@ import com.example.board.exception.PostNotFoundException;
 import com.example.board.repository.PostRepository;
 import com.example.board.service.view.ViewCountService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -16,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 @Transactional(readOnly = true)
@@ -91,17 +93,26 @@ public class PostService {
     public void flushViewCountToDb(Long postId) {
         Long redisCount = viewCountService.getAndDeleteDelta(postId);
 
-        if (redisCount <= 0L) {
+        if (redisCount == null || redisCount <= 0L) {
             viewCountService.removeDirtyPostId(postId);
             return;
         }
 
         try {
+//            if (postId > 0) {
+//                throw new RuntimeException("flush test");
+//            }
             postRepository.increaseViewCountBy(postId, redisCount);
             viewCountService.removeDirtyPostId(postId);
+
         } catch (Exception e) {
             viewCountService.increaseBy(postId, redisCount);
             throw e;
         }
+    }
+
+    @Transactional
+    public void directUpdate(Long id) {
+        postRepository.directIncreaseViewCount(id);
     }
 }
