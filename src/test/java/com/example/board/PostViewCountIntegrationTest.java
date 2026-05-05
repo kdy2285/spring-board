@@ -5,10 +5,13 @@ import com.example.board.repository.PostRepository;
 import com.example.board.service.PostService;
 import com.example.board.service.view.ViewCountService;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.core.StringRedisTemplate;
+
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,24 +33,39 @@ class PostViewCountIntegrationTest {
     private static final String VIEW_COUNT_DIRTY_SET_KEY = "post:viewCount:dirty";
     private static final String VIEW_COUNT_DELTA_KEY_PREFIX = "post:viewCount:delta:";
 
+    @BeforeEach
+    void setUp() {
+        clearRedis();
+        postRepository.deleteAll();
+    }
+
     @AfterEach
     void tearDown() {
+        clearRedis();
         postRepository.deleteAll();
+    }
+
+    private void clearRedis() {
         redisTemplate.delete(VIEW_COUNT_DIRTY_SET_KEY);
+
+        Set<String> keys = redisTemplate.keys(VIEW_COUNT_DELTA_KEY_PREFIX + "*");
+        if (keys != null && !keys.isEmpty()) {
+            redisTemplate.delete(keys);
+        }
     }
 
     @Test
     void 조회하면_Redis_delta가_증가하고_dirty_set에_등록된다() {
-        // given
         Post post = postRepository.save(new Post("title", "content"));
         Long postId = post.getId();
 
-        // when
+        Post savedPost = postRepository.findById(postId).orElseThrow();
+        assertThat(savedPost.getViewCount()).isEqualTo(0);
+
         postService.getById(postId);
         postService.getById(postId);
         postService.getById(postId);
 
-        // then
         Long redisCount = viewCountService.get(postId);
         Post foundPost = postRepository.findById(postId).orElseThrow();
 

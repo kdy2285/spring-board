@@ -249,6 +249,8 @@ SMEMBERS post:viewCount:dirty
 
 Redis 기반 조회수 처리 흐름을 통합 테스트로 검증했습니다.
 
+테스트 간 Redis 데이터 오염을 방지하기 위해 각 테스트 실행 전후로 조회수 delta key와 dirty set을 초기화했습니다.
+
 ### 1. 조회 시 Redis delta 증가 검증
 
 게시글 조회 요청 시 DB의 `view_count`를 직접 증가시키지 않고 Redis delta만 증가하는지 검증했습니다.
