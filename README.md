@@ -33,6 +33,7 @@ Spring Boot 기반 게시판 CRUD 프로젝트입니다.
 - Scheduler/manual flush를 통한 DB 반영
 - DB direct update 방식과 Redis buffering 방식 비교
 - flush 실패 시 Redis delta 복구
+- Redis 조회수 처리 흐름 통합 테스트
 
 ---
 
@@ -202,6 +203,25 @@ int directIncreaseViewCount(@Param("id") Long id);
 
 ---
 
+## 실험 한계
+
+이번 성능 비교는 로컬 개발 환경의 단일 스레드 반복 호출 방식으로 수행했습니다.
+
+따라서 실제 운영 환경에서 발생할 수 있는 다음 요소들은 완전히 반영하지 못했습니다.
+
+- 다중 사용자 동시 요청
+- DB connection pool 경합
+- DB row lock 대기
+- Redis network latency
+- 애플리케이션 서버와 DB/Redis 간 분리된 네트워크 환경
+- Scheduler 실행 주기에 따른 DB 반영 지연
+
+따라서 본 실험은 "Redis 방식이 항상 더 빠르다"를 증명하기 위한 것이 아닙니다.
+
+이 실험의 목적은 조회수 증가 요청에서 DB 직접 update 방식과 Redis buffering 방식을 비교하고, Redis 기반 구조가 DB write 횟수를 줄이는 효과가 있음을 확인하는 것입니다.
+
+---
+
 ## 테스트 시나리오
 
 1. 게시글 조회 요청을 여러 번 호출
@@ -221,6 +241,72 @@ docker exec -it board-redis redis-cli
 ```redis
 GET post:viewCount:delta:1
 SMEMBERS post:viewCount:dirty
+```
+
+---
+
+## 테스트 검증
+
+Redis 기반 조회수 처리 흐름을 통합 테스트로 검증했습니다.
+
+### 1. 조회 시 Redis delta 증가 검증
+
+게시글 조회 요청 시 DB의 `view_count`를 직접 증가시키지 않고 Redis delta만 증가하는지 검증했습니다.
+
+검증 항목:
+
+- 게시글 조회 요청 횟수만큼 Redis delta 증가
+- dirty set에 postId 등록
+- flush 전까지 DB `view_count`는 변경되지 않음
+
+### 2. flush 시 DB 반영 및 Redis 정리 검증
+
+Redis에 누적된 조회수 delta를 DB에 반영한 뒤 Redis key와 dirty set이 정리되는지 검증했습니다.
+
+검증 항목:
+
+- Redis delta 값만큼 DB `view_count` 증가
+- Redis delta key 삭제
+- dirty set에서 postId 제거
+
+---
+
+## 테스트 실행
+
+전체 테스트 실행:
+
+```bash
+./gradlew test
+```
+
+Windows CMD 환경:
+
+```cmd
+gradlew.bat test
+```
+
+Windows PowerShell 환경:
+
+```powershell
+.\gradlew.bat test
+```
+
+특정 통합 테스트만 실행:
+
+```bash
+./gradlew test --tests "com.example.board.PostViewCountIntegrationTest"
+```
+
+Windows CMD 환경:
+
+```cmd
+gradlew.bat test --tests "com.example.board.PostViewCountIntegrationTest"
+```
+
+Windows PowerShell 환경:
+
+```powershell
+.\gradlew.bat test --tests "com.example.board.PostViewCountIntegrationTest"
 ```
 
 ---
@@ -249,3 +335,5 @@ SMEMBERS post:viewCount:dirty
 Redis delta, dirty set, Scheduler batch flush를 활용하여 조회수 증가 요청에서 발생하는 DB write 부하를 줄이는 구조를 적용했습니다.
 
 조회수처럼 강한 정합성이 필요하지 않은 데이터에 대해 eventual consistency를 허용하고, batch flush와 실패 복구 로직을 통해 확장성과 안정성을 고려한 설계를 경험했습니다.
+
+또한 통합 테스트를 통해 조회 시 Redis delta 증가, flush 시 DB 반영, Redis key 및 dirty set 정리 흐름을 검증했습니다.
