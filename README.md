@@ -53,6 +53,53 @@ Spring Boot 기반 게시판 CRUD 프로젝트에 Redis 기반 조회수 bufferi
 
 ---
 
+## 실행 방법
+
+### 1. Redis 실행
+
+Docker로 Redis를 실행합니다.
+
+```bash
+docker run --name board-redis \
+  -p 6379:6379 \
+  -d redis:7
+```
+
+이미 컨테이너가 생성된 경우:
+
+```bash
+docker start board-redis
+```
+
+### 2. 애플리케이션 실행
+
+```bash
+git clone https://github.com/kdy2285/spring-board.git
+cd spring-board
+./gradlew bootRun
+```
+
+Windows 환경:
+
+```bash
+gradlew.bat bootRun
+```
+
+### 3. 테스트 실행
+
+```bash
+./gradlew test
+```
+
+Redis 조회수 통합 테스트만 실행:
+
+```bash
+./gradlew test \
+  --tests "com.example.board.PostViewCountIntegrationTest"
+```
+
+---
+
 ## API 목록
 
 | Method | URI | 설명 |
@@ -354,46 +401,6 @@ Redis에 누적된 조회수 delta를 DB에 반영한 뒤 Redis key와 dirty set
 - Redis delta 값만큼 DB `view_count` 증가
 - Redis delta key 삭제
 - dirty set에서 postId 제거
-
----
-
-## 테스트 실행
-
-전체 테스트 실행:
-
-```bash
-./gradlew test
-```
-
-Windows CMD 환경:
-
-```cmd
-gradlew.bat test
-```
-
-Windows PowerShell 환경:
-
-```powershell
-.\gradlew.bat test
-```
-
-특정 통합 테스트만 실행:
-
-```bash
-./gradlew test --tests "com.example.board.PostViewCountIntegrationTest"
-```
-
-Windows CMD 환경:
-
-```cmd
-gradlew.bat test --tests "com.example.board.PostViewCountIntegrationTest"
-```
-
-Windows PowerShell 환경:
-
-```powershell
-.\gradlew.bat test --tests "com.example.board.PostViewCountIntegrationTest"
-```
 
 ---
 
