@@ -465,36 +465,6 @@ Redis에 누적된 조회수 delta를 DB에 반영한 뒤 Redis key와 dirty set
 
 ---
 
-## 면접 답변 포인트
-
-### Redis를 사용한 이유
-
-조회수는 요청마다 DB update를 수행하면 write 부하가 커지고, 동일 게시글에 트래픽이 몰릴 경우 row update 경합이 발생할 수 있습니다.  
-조회수는 강한 정합성이 필수인 데이터가 아니므로 Redis에 증가분을 먼저 누적하고, 일정 주기마다 DB에 batch 반영하는 구조로 설계했습니다.
-
----
-
-### Dirty Set을 사용한 이유
-
-Redis 전체 key를 scan하면 운영 환경에서 성능 부담이 커질 수 있습니다.  
-따라서 조회수가 증가한 게시글 ID만 dirty set에 저장하고, flush 시 dirty set에 포함된 게시글만 대상으로 처리했습니다.
-
----
-
-### Redis 방식이 더 느리게 측정된 이유
-
-로컬 단일 스레드 테스트에서는 Redis `increment`, dirty set 추가, network round-trip 비용 때문에 DB direct update보다 total time이 더 크게 측정될 수 있습니다.  
-하지만 이 구조의 목적은 단건 요청 속도 개선이 아니라 DB write 횟수 감소와 트래픽 증가 상황에서의 DB 부하 완화입니다.
-
----
-
-### 데이터 유실 가능성은 어떻게 줄였는가
-
-Redis 안의 경합은 Lua로 dirty set 제거와 delta 회수를 원자화해 없앴고, DB UPDATE 예외는 delta 복구로 처리했습니다.
-다만 delta를 꺼낸 뒤 DB 커밋 전에 프로세스가 종료되는 경우는 Redis와 DB가 하나의 트랜잭션이 아니라서 막지 못합니다. 조회수의 정합성 요구 수준을 고려해 이 범위를 받아들였고, 보장 범위 표에 남겨두었습니다.
-
----
-
 ## 결론
 
 Redis delta, dirty set, Scheduler batch flush를 활용하여 조회수 증가 요청에서 발생하는 DB write 부하를 줄이는 구조를 적용했습니다.
