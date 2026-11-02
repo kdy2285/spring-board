@@ -15,7 +15,7 @@ Spring Boot 기반 게시판 CRUD 프로젝트에 Redis 기반 조회수 bufferi
 - 1000회 조회 기준 DB write 횟수를 `1000회 → 1회`로 감소
 - Redis delta key와 dirty set을 활용해 변경된 게시글만 DB에 batch 반영
 - Scheduler/manual flush를 통해 Redis 누적 조회수를 DB에 반영
-- Redis `GETDEL` 기반으로 flush 중 새로 증가한 조회수 유실 가능성 완화
+- Lua 스크립트로 flush 시 dirty set 제거와 delta 회수를 원자화해 Redis 명령 간 경합 제거
 - DB 반영 실패 시 Redis delta를 복구하여 데이터 유실 가능성 감소
 - 통합 테스트로 조회수 증가, DB 반영, Redis key 정리 흐름 검증
 
@@ -148,9 +148,9 @@ sequenceDiagram
     App-->>Client: DB viewCount + Redis delta 응답
 
     App->>Redis: Scheduler/manual flush
-    Redis-->>App: GETDEL delta
+    App->>Redis: Lua(SREM dirty, GET + DEL delta)
+    Redis-->>App: delta
     App->>DB: view_count += delta
-    App->>Redis: SREM dirty postId
 ```
 
 ---
@@ -243,50 +243,69 @@ flush 작업 시간이 길어질 경우에도 작업이 중첩 실행되지 않�
 ```java
 @Transactional
 public void flushViewCountToDb(Long postId) {
-    Long redisCount = viewCountService.getAndDeleteDelta(postId);
+    long redisCount = viewCountService.takeDeltaForFlush(postId); // Lua: SREM + GET + DEL
 
-    if (redisCount == null || redisCount <= 0L) {
-        viewCountService.removeDirtyPostId(postId);
+    if (redisCount <= 0L) {
         return;
     }
 
     try {
         postRepository.increaseViewCountBy(postId, redisCount);
-        viewCountService.removeDirtyPostId(postId);
-    } catch (Exception e) {
-        viewCountService.increaseBy(postId, redisCount);
+    } catch (RuntimeException e) {
+        viewCountService.restoreDelta(postId, redisCount);     // Lua: INCRBY + SADD
         throw e;
     }
 }
 ```
 
-DB 반영에 실패하면 이미 가져온 Redis delta 값을 다시 Redis에 복구합니다.  
-이를 통해 flush 중 예외가 발생해도 조회수 증가분이 유실될 가능성을 줄였습니다.
+DB UPDATE가 예외를 던지면 가져온 delta를 Redis에 되돌리고 dirty set에 다시 등록합니다.
 
 ---
 
 ## Flush 안정성
 
-단순히 아래 순서로 처리하면 동시 요청 상황에서 조회수 유실 가능성이 있습니다.
+### 1단계: GET → DELETE 사이 유실
 
 ```text
-GET delta
-→ DB UPDATE
-→ DELETE delta
+GET delta → DB UPDATE → DELETE delta
 ```
 
-예를 들어 `GET` 이후 새로운 조회 요청이 들어와 Redis delta가 증가했는데, 이후 `DELETE`가 실행되면 새로 증가한 값까지 함께 삭제될 수 있습니다.
+`GET` 이후 들어온 조회수가 `DELETE`에 함께 지워질 수 있어, `GETDEL`로 가져오면서 삭제하도록 바꿨습니다.
 
-이를 완화하기 위해 Redis의 `GETDEL` 방식으로 delta를 가져오면서 삭제합니다.
+### 2단계: GETDEL → SREM 사이 방치
 
 ```text
-Redis GETDEL delta
-→ DB view_count += delta
-→ dirty set 제거
-→ 실패 시 Redis delta 복구
+GETDEL delta → DB 반영 → SREM dirty
 ```
 
-이 구조는 완전한 분산 트랜잭션은 아니지만, 조회수처럼 약한 정합성을 허용할 수 있는 데이터에서는 현실적인 trade-off로 판단했습니다.
+`GETDEL`과 `SREM` 사이에 조회가 들어오면, `INCR`은 새 delta를 만들지만 `SADD`는 이미 들어 있는 postId라 변화가 없습니다. 이어서 `SREM`이 실행되면 delta는 남아 있는데 dirty set에서는 빠집니다. 그 게시글이 다시 조회되기 전까지 증가분이 DB에 반영되지 않습니다.
+
+### 3단계: Lua로 원자화
+
+순서를 `SREM → GETDEL`로 바꾸면 요청 간 경합은 사라지지만, 두 명령 사이에 프로세스가 종료되면 dirty 표시만 사라집니다. 그래서 dirty set 제거와 delta 회수를 Lua 스크립트 하나로 묶었습니다. 실패 시 복구(`INCRBY + SADD`)도 같은 방식으로 묶었습니다.
+
+```lua
+redis.call('SREM', KEYS[1], ARGV[1])
+local delta = redis.call('GET', KEYS[2])
+if delta then redis.call('DEL', KEYS[2]) end
+return delta
+```
+
+조회 요청은 `INCR → SADD` 순서로 기록합니다. flush가 두 명령 사이에 실행되면 그 증가분은 이번 flush에 포함되고, 이어지는 `SADD`는 delta가 없는 postId를 남깁니다. 이 postId는 다음 flush에서 그대로 정리되므로 유실이 아닙니다.
+
+### 보장 범위
+
+| 상황 | 결과 |
+|---|---|
+| 조회와 flush가 동시에 실행 | 유실·중복 없음 (Lua 원자 실행) |
+| 여러 서버가 같은 게시글을 동시에 flush | 중복 반영 없음 (delta는 한 번만 회수됨) |
+| DB UPDATE 예외 | delta 복구 + dirty 재등록, DB 롤백 |
+| delta 회수 후 DB 커밋 전 프로세스 종료 | **유실** |
+| DB 커밋 단계 실패 (catch 범위 밖) | **유실** |
+
+마지막 두 경우는 Redis와 DB가 하나의 트랜잭션이 아니기 때문에 Lua로도 막을 수 없습니다. 막으려면 delta를 처리 중 key로 옮겨두고 커밋 후 삭제하는 방식, 또는 DB 쪽에 반영 이력을 남기는 방식이 필요합니다. 조회수는 약한 정합성을 허용하는 데이터라 이 범위는 받아들였습니다.
+
+Redis Cluster에서는 Lua가 다루는 key들이 같은 slot에 있어야 합니다. 현재 key 설계(`post:viewCount:dirty`, `post:viewCount:delta:{id}`)는 단일 Redis 기준이며, Cluster로 옮기면 hash tag로 slot을 맞추거나 key 구조를 바꿔야 합니다.
 
 ---
 
@@ -404,6 +423,27 @@ Redis에 누적된 조회수 delta를 DB에 반영한 뒤 Redis key와 dirty set
 
 ---
 
+### 3. DB 반영 실패 시 복구 검증
+
+`view_count`(INT) 범위를 넘는 delta를 넣어 DB UPDATE를 실제로 실패시킨 뒤 확인합니다.
+
+- DB `view_count`는 롤백되어 변하지 않음
+- Redis delta가 flush 전 값으로 복구됨
+- dirty set에 postId가 다시 등록됨
+
+---
+
+### 4. 조회와 flush 동시 실행 검증
+
+16개 스레드로 조회 2,000건을 발생시키는 동안 flush를 반복 실행하고, 마지막에 dirty set 기준 flush만 한 번 더 실행합니다.
+
+- DB `view_count`가 정확히 2,000
+- 남은 delta key 없음
+- 조회가 진행되는 동안 flush가 1회 이상 실제로 실행됨 (경합이 일어나지 않은 채 통과하는 것을 방지)
+- flush 스레드에서 예외가 발생하지 않음 (별도 스레드 예외는 테스트 스레드로 전달되지 않으므로 직접 수집해 검증)
+
+---
+
 ## 설계 Trade-off
 
 ### 장점
@@ -450,8 +490,8 @@ Redis 전체 key를 scan하면 운영 환경에서 성능 부담이 커질 수 �
 
 ### 데이터 유실 가능성은 어떻게 줄였는가
 
-flush 시 Redis delta를 `GETDEL`로 가져오면서 삭제하고, DB 반영에 실패하면 가져온 delta 값을 다시 Redis에 복구하도록 구현했습니다.  
-이를 통해 flush 중 예외가 발생해도 조회수 증가분이 사라질 가능성을 줄였습니다.
+Redis 안의 경합은 Lua로 dirty set 제거와 delta 회수를 원자화해 없앴고, DB UPDATE 예외는 delta 복구로 처리했습니다.
+다만 delta를 꺼낸 뒤 DB 커밋 전에 프로세스가 종료되는 경우는 Redis와 DB가 하나의 트랜잭션이 아니라서 막지 못합니다. 조회수의 정합성 요구 수준을 고려해 이 범위를 받아들였고, 보장 범위 표에 남겨두었습니다.
 
 ---
 

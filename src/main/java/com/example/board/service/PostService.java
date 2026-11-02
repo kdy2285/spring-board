@@ -34,8 +34,6 @@ public class PostService {
 
     @Transactional(readOnly = true)
     public PostResponse getById(Long id) {
-//        postRepository.increaseViewCount(id);
-
         Post post = postRepository.findById(id)
                 .orElseThrow(() -> new PostNotFoundException(id));
 
@@ -89,24 +87,27 @@ public class PostService {
                         post.getCreatedAt(), post.getUpdatedAt(), post.getViewCount()));
     }
 
+    /**
+     * Redis에서 delta를 원자적으로 꺼낸 뒤(SREM + GET + DEL, Lua) DB에 더한다.
+     *
+     * 보장하는 것: Redis 명령 사이의 경합으로 증가분이 dirty set 밖에 방치되거나 두 번 반영되지 않는다.
+     * 보장하지 않는 것: Redis와 DB는 하나의 트랜잭션이 아니다.
+     *  - DB UPDATE가 예외를 던지면 delta를 되돌린다(이 메서드의 catch).
+     *  - 꺼낸 뒤 DB 커밋 전에 프로세스가 종료되거나, 커밋 단계에서 실패하면 그 delta는 유실된다.
+     *  조회수는 약한 정합성을 허용하는 데이터라 이 범위를 받아들인다.
+     */
     @Transactional
     public void flushViewCountToDb(Long postId) {
-        Long redisCount = viewCountService.getAndDeleteDelta(postId);
+        long redisCount = viewCountService.takeDeltaForFlush(postId);
 
-        if (redisCount == null || redisCount <= 0L) {
-            viewCountService.removeDirtyPostId(postId);
+        if (redisCount <= 0L) {
             return;
         }
 
         try {
-//            if (postId > 0) {
-//                throw new RuntimeException("flush test");
-//            }
             postRepository.increaseViewCountBy(postId, redisCount);
-            viewCountService.removeDirtyPostId(postId);
-
-        } catch (Exception e) {
-            viewCountService.increaseBy(postId, redisCount);
+        } catch (RuntimeException e) {
+            viewCountService.restoreDelta(postId, redisCount);
             throw e;
         }
     }
